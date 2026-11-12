@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-bot",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": false,
   "type": "module",
   "description": "Grok-bot style AI organization: a chief-of-staff agent that hires departments and employees and dispatches real work on this machine.",
