@@ -1,0 +1,10 @@
+node_modules/
+*.log
+*.bak
+*.bak-ok
+*.orig
+.tmp/
+.milancat/
+dist/
+.DS_Store
+Thumbs.db

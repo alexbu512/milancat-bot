@@ -1,0 +1,46 @@
+{
+  "name": "@local/dsh-bot",
+  "version": "0.6.1",
+  "private": false,
+  "type": "module",
+  "description": "Grok-bot style AI organization: a chief-of-staff agent that hires departments and employees and dispatches real work on this machine.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "使用手册.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agent",
+    "multi-agent",
+    "subagent",
+    "ai-organization",
+    "grok-bot"
+  ],
+  "license": "MIT"
+}

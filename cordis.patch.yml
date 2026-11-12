@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-bot
+      name: '@local/dsh-bot'
