@@ -891,18 +891,14 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'dbot-btn primary', onClick: save, disabled: saving }, saving ? '保存中…' : '保存'),
                 h('button', { className: 'dbot-btn', onClick: () => setOpen(false) }, '取消'),
                 h('div', { style: { flex: 1 } }),
-                h(
-                  'button',
-                  {
-                    className: 'dbot-btn danger',
-                    onClick: async () => {
-                      if (!window.confirm('辞退「' + e.name + '」？')) return
-                      await api('/employees/' + e.id, 'DELETE')
-                      props.onChanged()
-                    },
+                h(ConfirmBtn, {
+                  label: '辞退',
+                  confirm: '再点一次，确定辞退',
+                  onConfirm: async () => {
+                    await api('/employees/' + e.id, 'DELETE')
+                    props.onChanged()
                   },
-                  '辞退',
-                ),
+                }),
               ),
             )
           : h(
@@ -964,6 +960,37 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+      )
+    }
+
+    /* 两步确认按钮。原生 window.confirm 在 DSH 的 WebView 里会被直接拦掉（返回 false），
+     * 于是 `if (!window.confirm(...)) return` 就变成「点了没反应」。所有危险操作走这里。 */
+    function ConfirmBtn(props) {
+      const [armed, setArmed] = useState(false)
+      useEffect(() => {
+        if (!armed) return
+        const t = setTimeout(() => setArmed(false), 4000)
+        return () => clearTimeout(t)
+      }, [armed])
+      return h(
+        'button',
+        {
+          className: 'dbot-btn danger' + (armed ? ' armed' : ''),
+          disabled: props.disabled,
+          onClick: async () => {
+            if (!armed) {
+              setArmed(true)
+              return
+            }
+            setArmed(false)
+            try {
+              await props.onConfirm()
+            } catch (err) {
+              window.alert('操作失败：' + ((err && err.message) || err))
+            }
+          },
+        },
+        armed ? props.confirm || '再点一次，确定' : props.label,
       )
     }
 
@@ -1044,6 +1071,27 @@ window.__ModuleLoader__.load({
             h('h2', null, '助理的能力设定'),
             h('button', { className: 'dbot-iconbtn', onClick: props.onClose, 'aria-label': '关闭能力设置' }, h(Icon, { name: 'x', size: 15 })),
           ),
+          h(
+            'div',
+            { className: 'dbot-danger-zone' },
+            h(ConfirmBtn, {
+              label: '清空聊天记录',
+              confirm: '再点一次，确定清空',
+              onConfirm: async () => {
+                await api('/assistant/clear', 'POST', {})
+                props.onChanged && props.onChanged()
+              },
+            }),
+            h(ConfirmBtn, {
+              label: '清空群聊记录',
+              confirm: '再点一次，确定清空',
+              onConfirm: async () => {
+                await api('/groups/clear', 'POST', {})
+                props.onChanged && props.onChanged()
+              },
+            }),
+            h('span', { className: 'dbot-danger-hint' }, '只删对话，部门、员工、任务都不动。'),
+          ),
           h(Field, { label: '名字', value: f.name, onChange: set('name') }),
           h(Field, { label: '描述', value: f.description, onChange: set('description'), placeholder: '一句话说明这位助理的风格' }),
           h(Field, {
@@ -1083,26 +1131,6 @@ window.__ModuleLoader__.load({
             { className: 'dbot-settings-foot' },
             h('button', { className: 'dbot-send', onClick: save, disabled: saving }, saving ? '保存中…' : '保存'),
             h('button', { className: 'dbot-btn', onClick: props.onClose }, '取消'),
-            h('span', { className: 'dbot-foot-gap' }),
-            h(
-              'button',
-              {
-                className: 'dbot-btn danger',
-                onClick: async () => {
-                  const n = ((props.state && props.state.assistant && props.state.assistant.messages) || []).length
-                  if (!n) return
-                  if (!window.confirm('清空助理的聊天记录？组织、任务、部门群都不动，只删这一栏对话。')) return
-                  try {
-                    await api('/assistant/clear', 'POST', {})
-                    props.onChanged && props.onChanged()
-                    props.onClose && props.onClose()
-                  } catch (e) {
-                    window.alert('清空失败：' + ((e && e.message) || e))
-                  }
-                },
-              },
-              '清空聊天记录',
-            ),
           ),
         ),
       )
@@ -1119,6 +1147,7 @@ window.__ModuleLoader__.load({
       const runtime = props.runtime || {}
       const scrollRef = useRef(null)
       const [cfg, setCfg] = useState(false)
+      const [menu, setMenu] = useState(false)
       const count = messages.length + live.length + (typing ? 1 : 0)
       useEffect(() => {
         const el = scrollRef.current
@@ -1153,6 +1182,47 @@ window.__ModuleLoader__.load({
               { className: 'dbot-connection' },
               h(Icon, { name: 'shield', size: 13 }),
               h('span', null, 'milancat bot'),
+            ),
+            h(
+              'div',
+              { className: 'dbot-headmenu' },
+              h(
+                'button',
+                {
+                  className: 'dbot-btn dbot-iconbtn',
+                  onClick: () => setMenu((v) => !v),
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': menu ? 'true' : 'false',
+                  title: '更多',
+                  'aria-label': '更多',
+                },
+                h('span', { className: 'dbot-dots' }, '···'),
+              ),
+              menu
+                ? h(
+                    'div',
+                    { className: 'dbot-menu', role: 'menu' },
+                    h(ConfirmBtn, {
+                      label: '清空聊天记录',
+                      confirm: '再点一次，确定清空',
+                      onConfirm: async () => {
+                        await api('/assistant/clear', 'POST', {})
+                        setMenu(false)
+                        props.onChanged && props.onChanged()
+                      },
+                    }),
+                    h(ConfirmBtn, {
+                      label: '清空群聊记录',
+                      confirm: '再点一次，确定清空',
+                      onConfirm: async () => {
+                        await api('/groups/clear', 'POST', {})
+                        setMenu(false)
+                        props.onChanged && props.onChanged()
+                      },
+                    }),
+                    h('span', { className: 'dbot-menu-note' }, '只删对话，部门、员工、任务都不动。'),
+                  )
+                : null,
             ),
             h(
               'button',
@@ -1340,18 +1410,14 @@ window.__ModuleLoader__.load({
             { className: 'dbot-headacts' },
             h('button', { className: 'dbot-btn', onClick: () => props.onOpenGroup(dept.id) }, '部门群'),
             h('button', { className: 'dbot-btn', onClick: () => setAdding(!adding) }, adding ? '取消' : '＋ 加人'),
-            h(
-              'button',
-              {
-                className: 'dbot-btn danger',
-                onClick: async () => {
-                  if (!window.confirm('解散「' + dept.name + '」？员工会一起移除。')) return
-                  await api('/departments/' + dept.id, 'DELETE')
-                  props.onDeleted()
-                },
+            h(ConfirmBtn, {
+              label: '解散',
+              confirm: '再点一次，确定解散',
+              onConfirm: async () => {
+                await api('/departments/' + dept.id, 'DELETE')
+                props.onDeleted()
               },
-              '解散',
-            ),
+            }),
           ),
         }),
         h(
@@ -2476,6 +2542,14 @@ window.__ModuleLoader__.load({
 .dbot-switch-dot{width:15px;height:15px;border-radius:50%;background:#FFFFFF;transition:transform var(--dbot-motion-short) ease}
 .dbot-switch.on .dbot-switch-dot{transform:translateX(15px)}
 .dbot-settings-foot{display:flex;align-items:center;gap:8px}
+.dbot-danger-zone{position:relative;z-index:2;margin-top:14px;padding-top:12px;border-top:1px solid var(--dbot-divider);display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.dbot-headmenu{position:relative;z-index:40}
+.dbot-dots{letter-spacing:1px;font-weight:600;line-height:1}
+.dbot-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:41;min-width:196px;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--dbot-border);border-radius:var(--dbot-radius-card);background:var(--dbot-surface);box-shadow:var(--dbot-shadow-card)}
+.dbot-menu .dbot-btn{justify-content:flex-start;width:100%}
+.dbot-menu-note{font-size:11.5px;line-height:1.5;color:var(--dbot-text-muted)}
+.dbot-danger-hint{flex:1 1 100%;font-size:11.5px;color:var(--dbot-text-muted);line-height:1.5}
+.dbot-btn.danger.armed{background:#FBEEF0;border-color:#E7B9BF;color:#A82B38}
 .dbot-foot-gap{flex:1 1 auto}
 .dbot-pref{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:14px;border-top:1px solid var(--dbot-divider)}
 .dbot-pref-title{font-size:12px;color:var(--dbot-text)}

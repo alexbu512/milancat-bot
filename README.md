@@ -13,6 +13,12 @@
 
 > 只想快点用起来 → 看 [使用手册.md](使用手册.md)。这份 README 讲怎么装、以及它内部是怎么搭的。
 
+## 截图
+
+| 助理 | 组织 | 部门群 |
+|---|---|---|
+| ![助理](assets/assistant.png) | ![组织](assets/organization.png) | ![部门群](assets/group.png) |
+
 ## 它和 DeepSeek superagent 的关系
 
 DeepSeek 开源的 superagent（`deepseek-ai/dsh-superagent-prototype`）是**单个交付 agent**：`Source → Trigger → Thread → Eval → Decision → Ticket → Assignment → Executor → Channel`，用 SQLite + 持久化队列保证一个需求从进入到交付不丢步，只在真正需要拍板时才打扰人。

@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-bot",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": false,
   "type": "module",
   "description": "Grok-bot style AI organization: a chief-of-staff agent that hires departments and employees and dispatches real work on this machine.",
@@ -19,7 +19,9 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "使用手册.md"
+    "使用手册.md",
+    "assets",
+    "screenshots.json"
   ],
   "dsh": {
     "bundle": {
