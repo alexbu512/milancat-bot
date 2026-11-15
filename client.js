@@ -227,6 +227,7 @@ window.__ModuleLoader__.load({
       '<symbol id="x" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>',
       '<symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>',
       '<symbol id="shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/><path d="m8 12 3 3 5-6"/></symbol>',
+      '<symbol id="pulse" viewBox="0 0 24 24"><path d="M3 13h4l2.5-7 4.5 13 2.5-6h4.5"/></symbol>',
     ].join('')
 
     function Icon(props) {
@@ -614,11 +615,12 @@ window.__ModuleLoader__.load({
       { id: 'org', label: '组织', icon: 'M4 20V10h5v10M15 20V4h5v16M3 20h18' },
       { id: 'groups', label: '群', icon: 'M4 5h16v10H9l-5 4V5Z' },
       { id: 'tasks', label: '任务', icon: 'M5 4h14v16H5zM8 9h8M8 13h8M8 17h5' },
+      { id: 'activity', label: '活动', icon: 'M3 13h4l2.5-7 4.5 13 2.5-6h4.5' },
       { id: 'sched', label: '定时', icon: 'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z' },
       { id: 'feishu', label: '飞书', icon: 'M21.5 3.2 2.8 10.6l6.9 2.6 2.6 7.1 9.2-17.1Z' },
     ]
 
-    const TAB_ICONS = { assistant: 'chat', org: 'org', groups: 'group', tasks: 'task', sched: 'clock', feishu: 'plane' }
+    const TAB_ICONS = { assistant: 'chat', org: 'org', groups: 'group', tasks: 'task', activity: 'pulse', sched: 'clock', feishu: 'plane' }
 
     function Rail(props) {
       return h(
@@ -794,6 +796,154 @@ window.__ModuleLoader__.load({
     }
 
     /** One employee card: view + inline editing of description / ability prompt. */
+    /* 这个人「记得什么、会怎么做」——记忆事实卡 + 技能手册，都在他自己的目录里 */
+    function MemSkill(props) {
+      const e = props.emp
+      const [facts, setFacts] = useState(null)
+      const [skill, setSkill] = useState('')
+      const [edit, setEdit] = useState(false)
+      const [draft, setDraft] = useState('')
+      const [adding, setAdding] = useState('')
+      const [note, setNote] = useState('')
+
+      const load = useCallback(async () => {
+        try {
+          const r = await api('/members/' + e.id + '/memory')
+          setFacts(r.rows || [])
+          const k = await api('/members/' + e.id + '/skill')
+          setSkill(k.text || '')
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+      }, [e.id])
+
+      useEffect(() => {
+        load()
+      }, [e.id])
+
+      async function dropFact(id) {
+        try {
+          await api('/members/' + e.id + '/memory/' + id, 'DELETE')
+          load()
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+      }
+
+      async function addFact() {
+        const text = adding.trim()
+        if (!text) return
+        try {
+          await api('/members/' + e.id + '/memory', 'POST', { text, topic: '老板交代' })
+          setAdding('')
+          load()
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+      }
+
+      async function saveSkill() {
+        try {
+          const r = await api('/members/' + e.id + '/skill', 'PUT', { text: draft })
+          setSkill(r.text || '')
+          setEdit(false)
+          props.onChanged && props.onChanged()
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+      }
+
+      const rows = facts || []
+      return h(
+        'div',
+        { className: 'dbot-mem' },
+        h(
+          'div',
+          { className: 'dbot-memhead' },
+          h('span', { className: 'dbot-role' }, '记得的事'),
+          h('span', { className: 'dbot-memcount' }, facts === null ? '读取中…' : rows.length + ' 条'),
+          h('div', { style: { flex: 1 } }),
+          h('button', { className: 'dbot-btn', onClick: load }, '刷新'),
+          rows.length
+            ? h(ConfirmBtn, {
+                label: '清空',
+                confirm: '再点一次，全忘掉',
+                onConfirm: async () => {
+                  await api('/members/' + e.id + '/memory/clear', 'POST', {}),
+                  load()
+                },
+              })
+            : null,
+        ),
+        facts === null
+          ? null
+          : rows.length
+            ? h(
+                'div',
+                { className: 'dbot-memlist' },
+                rows.map((f) =>
+                  h(
+                    'div',
+                    { key: f.id || f.text, className: 'dbot-memrow' },
+                    h('span', { className: 'dbot-memtag' }, f.topic || '旧记录'),
+                    h('span', { className: 'dbot-memtext' }, f.text),
+                    f.id ? h('button', { className: 'dbot-iconbtn', onClick: () => dropFact(f.id), title: '忘掉这条' }, '×') : null,
+                  ),
+                ),
+              )
+            : h('div', { className: 'dbot-desc' }, '还没记住什么。他干完活会自动记几条，也可以你现在写一条。'),
+        h(
+          'div',
+          { className: 'dbot-memadd' },
+          h('input', {
+            className: 'dbot-in',
+            placeholder: '要他记住一件事，例如：所有交付物放自己工位，别放桌面',
+            value: adding,
+            onChange: (ev) => setAdding(ev.target.value),
+            onKeyDown: (ev) => {
+              if (ev.key === 'Enter') addFact()
+            },
+          }),
+          h('button', { className: 'dbot-btn', onClick: addFact, disabled: !adding.trim() }, '记一条'),
+        ),
+        h(
+          'div',
+          { className: 'dbot-memhead', style: { marginTop: 12 } },
+          h('span', { className: 'dbot-role' }, '技能手册'),
+          h('span', { className: 'dbot-memcount' }, skill ? skill.length + ' 字' : '还没有'),
+          h('div', { style: { flex: 1 } }),
+          h('button', {
+            className: 'dbot-btn',
+            onClick: () => {
+              if (!edit) setDraft(skill)
+              setEdit(!edit)
+            },
+          }, edit ? '取消' : skill ? '改' : '写技能'),
+        ),
+        edit
+          ? h(
+              'div',
+              { className: 'dbot-form' },
+              h('textarea', {
+                className: 'dbot-in',
+                rows: 8,
+                value: draft,
+                onChange: (ev) => setDraft(ev.target.value),
+                placeholder: '一行一条做法，例如：\\n- 写文件用相对路径，落在自己工位\\n- 汇报只写结论和文件路径',
+              }),
+              h(
+                'div',
+                { className: 'dbot-actions' },
+                h('button', { className: 'dbot-btn primary', onClick: saveSkill }, '保存技能'),
+                h('div', { style: { flex: 1 } }),
+                h('span', { className: 'dbot-desc', style: { margin: 0 } }, '每次开工都会注入这段'),
+              ),
+            )
+          : h('div', { className: 'dbot-skillpre' }, skill || '没写技能手册：他只能靠职责和记忆干。'),
+        note ? h('div', { className: 'dbot-desc', style: { color: '#C33947' } }, note) : null,
+      )
+    }
+
     function EmpCard(props) {
       const e = props.emp
       const [open, setOpen] = useState(false)
@@ -889,6 +1039,7 @@ window.__ModuleLoader__.load({
                 hint: '这段文字会作为他干活时遵守的角色设定，越具体越像这个人',
               }),
               h(CapPick, { value: f.caps, onChange: set('caps') }),
+              h(MemSkill, { emp: e, onChanged: props.onChanged }),
               h(
                 'div',
                 { className: 'dbot-actions' },
@@ -1817,6 +1968,146 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ----------------------------------------------------------- activity */
+
+    const ACT_TOOL_LABEL = {
+      write: '写文件',
+      edit: '改文件',
+      read: '读文件',
+      read_image: '看图',
+      bash: '跑命令',
+      pwsh: '跑命令',
+      glob: '找文件',
+      grep: '搜内容',
+      web_fetch: '联网读',
+      web_search: '联网搜',
+      computer_screenshot: '截屏',
+      computer_click: '点屏幕',
+      computer_type: '打字',
+      task: '派活',
+    }
+
+    function actTool(r) {
+      const t = String((r && r.tool) || '')
+      return ACT_TOOL_LABEL[t] || t || (r.kind === 'run' ? '一轮' : '动作')
+    }
+
+    function actTime(t) {
+      const d = new Date(Number(t) || 0)
+      const p = (n) => String(n).padStart(2, '0')
+      return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    }
+
+    function ActivityPane(props) {
+      const [rows, setRows] = useState([])
+      const [stats, setStats] = useState(null)
+      const [filter, setFilter] = useState('')
+      const [who, setWho] = useState('')
+      const [note, setNote] = useState('')
+      const [apps, setApps] = useState([])
+
+      const load = useCallback(async (pick) => {
+        const q = new URLSearchParams({ limit: '400' })
+        if (pick === 'fail') q.set('ok', 'false')
+        if (who.trim()) q.set('member', who.trim())
+        try {
+          const r = await api('/activity?' + q.toString())
+          setRows(Array.isArray(r && r.rows) ? r.rows : [])
+          setStats((r && r.stats) || null)
+          const ap = await api('/approvals')
+          setApps(Array.isArray(ap && ap.rows) ? ap.rows : [])
+        } catch (e) {
+          setNote(String((e && e.message) || e))
+        }
+      }, [who])
+
+      useEffect(() => {
+        let alive = true
+        load(filter)
+        const timer = setInterval(() => {
+          if (alive) load(filter)
+        }, 5000)
+        return () => {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [load, filter])
+
+      const decide = async (id, verb) => {
+        try {
+          await api('/approvals/' + encodeURIComponent(id) + '/' + verb, 'POST', {})
+          setNote(verb === 'allow' ? '已经放行，员工会接着做。' : '已经拒绝，员工会换个办法。')
+        } catch (e) {
+          setNote(String((e && e.message) || e))
+        }
+        load(filter)
+      }
+
+      const list = rows
+      const head = stats
+        ? `今天 ${stats.total} 次动作${stats.failed ? ` · ${stats.failed} 次失败` : ''}${stats.people ? ` · ${stats.people} 个人动过手` : ''}`
+        : '正在读取…'
+
+      return h(
+        'div',
+        { className: 'dbot-main' },
+        h(
+          'div',
+          { className: 'dbot-head' },
+          h('div', { className: 'dbot-headtext' },
+            h('div', { className: 'dbot-headname' }, '员工活动'),
+            h('div', { className: 'dbot-headsub' }, head)),
+          h('div', { className: 'dbot-headactions' },
+            h('input', {
+              className: 'dbot-in dbot-actsearch',
+              value: who,
+              placeholder: '按名字筛',
+              onChange: (e) => setWho(e.target.value),
+            }),
+            h('button', {
+              className: 'dbot-btn' + (filter === '' ? ' primary' : ''),
+              onClick: () => setFilter(''),
+            }, '全部'),
+            h('button', {
+              className: 'dbot-btn' + (filter === 'fail' ? ' primary' : ''),
+              onClick: () => setFilter('fail'),
+            }, '只看失败'),
+            h('button', { className: 'dbot-btn', onClick: () => load(filter) }, '刷新')),
+        ),
+        h(
+          'div',
+          { className: 'dbot-scroll' },
+          apps.length
+            ? h('div', { className: 'dbot-actpend' },
+              apps.map((a) =>
+                h('div', { key: a.id, className: 'dbot-pendrow' },
+                  h('span', { className: 'dbot-pendtag' }, '请示 ' + a.n),
+                  h('div', { className: 'dbot-pendtext', title: a.path },
+                    (a.member || '员工') + ' 想改 ' + a.path),
+                  h('button', { className: 'dbot-btn primary', onClick: () => decide(a.id, 'allow') }, '允许'),
+                  h('button', { className: 'dbot-btn', onClick: () => decide(a.id, 'deny') }, '拒绝'))))
+            : null,
+          note ? h('div', { className: 'dbot-hint' }, note) : null,
+          !list.length
+            ? h('div', { className: 'dbot-empty' }, '还没有活动记录。等员工动一次手，这里就会出现一行。')
+            : h('div', { className: 'dbot-actlist' },
+              list.map((r, i) =>
+                h('div', { key: `${r.t}-${i}`, className: 'dbot-actrow' + (r.ok === false ? ' is-fail' : '') },
+                  h('div', { className: 'dbot-acttime' }, actTime(r.t)),
+                  h('div', { className: 'dbot-actwho' }, r.member || r.dept || '助理'),
+                  h('div', { className: 'dbot-acttool' }, actTool(r)),
+                  h('div', { className: 'dbot-actwhat', title: r.detail || '' }, r.detail || (r.kind === 'run' ? '' : '—')),
+                  r.ok === false ? h('div', { className: 'dbot-actbad' }, '失败') : null,
+                  r.ms != null && r.ms >= 0 ? h('div', { className: 'dbot-actms' }, (r.ms / 1000).toFixed(1) + 's') : null,
+                ),
+              ),
+            ),
+          h('div', { className: 'dbot-footnote' },
+            `越界写文件会先在这里请示你（允许 / 拒绝），放行只对该文件、30 分钟内有效。记录写在本机 .milancat/activity/，按天一个文件，保留 ${(stats && stats.keepDays) || 14} 天。这里只读，不会拦谁，也不会自动答应什么。`),
+        ),
+      )
+    }
+
     /* ------------------------------------------------------------- feishu */
 
     function FeishuPane(props) {
@@ -2241,6 +2532,8 @@ window.__ModuleLoader__.load({
             onChanged: reload,
           })
           : h('div', { className: 'dbot-main' }, h(Head, { name: '群', title: '部门群' }), h('div', { className: 'dbot-empty' }, '还没有部门群。先去组织里建部门。'))
+      } else if (tab === 'activity') {
+        detail = h(ActivityPane, {})
       } else if (tab === 'feishu') {
         detail = h(FeishuPane, { onTab: setTab })
       } else if (tab === 'sched') {
@@ -2261,6 +2554,22 @@ window.__ModuleLoader__.load({
         list = h(DeptList, { state, q, sel: sel.org, onSelect: (id) => setSel(Object.assign({}, sel, { org: id })), onNew: newDept })
       } else if (tab === 'groups') {
         list = h(GroupList, { state, q, sel: sel.groups, onSelect: (id) => setSel(Object.assign({}, sel, { groups: id })) })
+      } else if (tab === 'activity') {
+        list = h(
+          'div',
+          { className: 'dbot-listbody' },
+          h(Item, {
+            active: true,
+            avatar: h(Av, { name: '活', size: 36 }),
+            title: '员工活动',
+            sub: '每个人动过手的记录',
+            dot: 'run',
+          }),
+          h('div', { className: 'dbot-listsec' }, '这是什么'),
+          h('div', { className: 'dbot-quick' }, h('span', { className: 'dbot-quick-i' }, '／'), h('span', null, '谁、什么时候、用什么工具、碰了哪个文件、成没成')),
+          h('div', { className: 'dbot-listsec' }, '存在哪'),
+          h('div', { className: 'dbot-quick' }, h('span', { className: 'dbot-quick-i' }, '／'), h('span', null, '.milancat/activity/ 下按天一个文件')),
+        )
       } else if (tab === 'feishu') {
         const fsState = (state && state.feishu) || {}
         list = h(
@@ -2540,6 +2849,15 @@ window.__ModuleLoader__.load({
 .dbot-caps-row{display:flex;flex-wrap:wrap;gap:7px}
 .dbot-cap{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--dbot-border);border-radius:8px;background:var(--dbot-control-inset);color:var(--dbot-text-secondary);font:inherit;font-size:11.5px;cursor:pointer;transition:border-color var(--dbot-motion-short) ease,background var(--dbot-motion-short) ease,color var(--dbot-motion-short) ease}
 .dbot-cap:hover{border-color:#9DBEEF;color:var(--dbot-text)}
+.dbot-mem{margin-top:14px;border-top:1px solid var(--dbot-border);padding-top:12px}
+.dbot-memhead{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.dbot-memcount{font-size:11.5px;color:var(--dbot-text-muted)}
+.dbot-memlist{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto}
+.dbot-memrow{display:flex;align-items:flex-start;gap:8px;padding:5px 8px;border-radius:8px;background:var(--dbot-bg-inset)}
+.dbot-memtag{flex:0 0 auto;font-size:11px;color:#1465E9;background:rgba(20,101,233,.08);border-radius:6px;padding:1px 6px;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dbot-memtext{flex:1 1 auto;font-size:12.5px;line-height:1.6;color:var(--dbot-text)}
+.dbot-memadd{display:flex;gap:8px;margin-top:8px}
+.dbot-skillpre{margin-top:2px;font-size:12.5px;line-height:1.7;white-space:pre-wrap;color:var(--dbot-text-secondary);background:var(--dbot-bg-inset);border-radius:8px;padding:9px 11px;max-height:190px;overflow:auto}
 .dbot-cap.on{border-color:#9DBEEF;background:#EAF2FE;color:#0C55D0}
 .dbot-switchrow{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:5px 0 18px;padding-top:17px;border-top:1px solid var(--dbot-divider);font-size:12px;color:var(--dbot-text)}
 .dbot-switchtext{min-width:0}
@@ -2571,6 +2889,24 @@ window.__ModuleLoader__.load({
 .dbot-desc{margin:6px 0 0;font-size:12px;line-height:1.8;color:var(--dbot-text-secondary)}
 .dbot-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:13px}
 .dbot-hint{margin:0;font-size:10.5px;line-height:1.7;color:var(--dbot-text-muted)}
+.dbot-actsearch{width:120px;height:28px;padding:0 9px;font-size:11.5px}
+.dbot-actlist{display:flex;flex-direction:column;margin:6px 0 0}
+.dbot-actrow{display:grid;grid-template-columns:56px 92px 62px minmax(0,1fr) 34px 44px;gap:9px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--dbot-divider);font-size:11.5px}
+.dbot-actrow:last-child{border-bottom:0}
+.dbot-acttime{font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--dbot-text-muted)}
+.dbot-actwho{color:var(--dbot-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dbot-acttool{padding:0 6px;border-radius:5px;background:var(--dbot-surface-raised);font-size:10.5px;color:var(--dbot-text-secondary);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dbot-actwhat{min-width:0;color:var(--dbot-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dbot-actrow.is-fail .dbot-actwhat,.dbot-actrow.is-fail .dbot-acttool{color:var(--dbot-danger)}
+.dbot-actbad{font-size:10px;color:var(--dbot-danger)}
+.dbot-actms{font-variant-numeric:tabular-nums;font-size:10px;color:var(--dbot-text-muted);text-align:right}
+.dbot-actpend{margin:16px 28px 6px;border:1px solid #E7C9A8;background:#FFF8EE;border-radius:12px;padding:12px 14px}
+.dbot-pendrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0}
+.dbot-pendrow + .dbot-pendrow{border-top:1px solid #F0DEC6}
+.dbot-pendtag{font-size:11px;font-weight:600;color:#8A620E;background:#FBEFD9;border-radius:6px;padding:2px 7px}
+.dbot-pendtext{flex:1 1 240px;min-width:0;font-size:12.5px;color:#20242C;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dbot-pendtext code{font-family:var(--dbot-font-mono);font-size:11.5px;color:#586170}
+.dbot-footnote{margin:16px 0 4px;font-size:10.5px;line-height:1.75;color:var(--dbot-text-muted)}
 .dbot-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .dbot-tag{padding:1px 6px;border-radius:5px;background:var(--dbot-surface-raised);font-size:10px;color:var(--dbot-text-secondary)}
 .dbot-kv{display:grid;grid-template-columns:92px minmax(0,1fr);gap:7px 12px;align-items:center;font-size:12px}

@@ -237,6 +237,147 @@ POST /feishu/app { appId: "cli_…", appSecret: "…" }
 - **凭据只进不出**：`engine.pubFeishu()` 把 `appSecret` 统一替换成 `••••••`，`/state`、`/feishu`、`/feishu/app`、`/feishu/test` 全部经过它（这一条是补的：早前 `/feishu/test` 会把明文 Secret 回给浏览器）。
 - 想彻底不启进程：开放平台 → 你的应用 → 权限管理勾 `im:message.group_msg` → 创建版本并发布。之后「机器人能自己读群消息」那条自检变 ✅，日志写 `poll identity: direct app`。
 
+## 员工活动账本 + 写文件闸门（0.7.0）
+
+### 活动账本：`lib/activity.js`
+
+平台给的是「事件」，不是「账」。`noteSessionEvent` 收到的 `tool/call`、`tool/result`、`turn/end` 被 `noteActivity()` 折成一行 JSON：
+
+```json
+{"t":1794616301068,"d":"2026-11-14","kind":"tool","member":"陈默","dept":"抖音组",
+ "taskId":"task_mwfo72s4iftri","tool":"write","detail":"E:\\...\\act2.txt","ok":true,"ms":12}
+```
+
+- `tool/call` 先只记 `{name, detail}` 到 `SHARED.calls`（key `agentId:callId`），等 `tool/result` 回来配对，才能算出耗时与成败。
+- `detail` 由 `describeArgs()` 从入参里挑最有信息量的那个字段（`path/file_path/command/query/url` 优先），所以一行就看得懂。
+- 落盘 `activity/<YYYY-MM-DD>.jsonl`（append-only），同时在内存留 600 条 ring 供 `/activity` 秒回；`pruneOld()` 保留 14 天。
+- 面板：`ActivityPane`（`client.js`）5 秒轮询 `/activity?limit=400`，可按人筛、只看失败。
+
+### 闸门：`installGuard()`
+
+OpenBot 的审批是「动作执行前由网关判定」。DSH 里对应的是 `tools.guard`：
+
+```ts
+ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | undefined
+```
+
+**同步**——所以这里不做「停下来等人点允许」，而是做硬边界：
+
+- 只对 `SHARED.owners` 里登记过的员工会话生效（老板自己的对话完全不受影响）。
+- `write/edit/delete/move/...` 的目标路径必须落在该员工的工作目录或 `.milancat/` 下，否则返回 `{reason}` 拒绝。
+- `bash/pwsh` 里命中 `DANGER_CMD`（`rm -rf /`、`format c:`、`diskpart`、删注册表…）直接拒绝。
+- 每次拒绝都写一行 `kind:"deny"` 进账本——**被拒的动作必须留下痕迹**，否则它在 transcript 里看不见。
+- `GUARD_VERSION` 递增即热重载生效（旧的 guard 闭包会被 dispose）。
+
+实测：让员工「把一句话写到 `C:\Users\ASUS\Desktop\gate-test.txt`」，工具返回
+
+> 这个位置不在你能改的范围里：C:\Users\ASUS\Desktop\gate-test.txt。你只能改自己的目录和 .milancat 下的文件。要动别处，先在群里说清楚、请老板点头。
+
+员工把这句原样汇报，桌面没有出现文件，账本里多了一行 `ok:false` 与一行 `deny`。
+
+### 顺带修掉的三个 DSH 升级破绽
+
+0.2.x 之后平台接口变过，插件原来靠的几个老接口没了，症状是「所有任务都报 `no subagent provider registered`」：
+
+1. `subagents.list()` 被移除 → 改成用 `getProvider('spawn' | 'fork')` 探名字（`providerName()`）。
+2. `agents.roots()` / `currentInitiator()` 在插件 fiber 里同时为空 → 用 `sessions.list()` + `agents.get(id)` 兜底拿 parent（`parentAgent()`）。
+3. `startActivation` 的字段从 `request:{cwd,parent,prompt}` 改成平铺，且返回的 handle 形状变过 → `startActivationCompat()` 两种形状按顺序试，成功的记在 `SHARED.startShape`；子会话还必须显式带 `agentOptions:{provider,model}`，否则它会「没有模型、跑一轮就 error」。
+
+## 请示与自动重排（0.7.1）
+
+### 越界写入先请示
+
+`installGuard` 拦下越界写入时不再只是拒绝，而是 `askApproval()` 开一条记录（`SHARED.approvals`，编号 `n`），
+`notifyApproval()` 把它写进助理对话并在飞书推一条，客户端「活动」页顶部渲染成 `[允许] [拒绝]`。
+
+- `GET /approvals` → `{ok, rows: [{id, n, member, dept, tool, path, at, state}], total}`
+- `POST /approvals/<id>/allow|deny` → `resolveApproval()`
+
+允许时把 `{path, until}` 压进 `SHARED.allowPaths`（默认 30 分钟），`approvalCovers()` 按**路径**判定而不是按会话 id ——
+同一个员工可能同时存在「拆分」和「执行」两个会话，绑会话会漏。随后 `tellChild()` 用 `subagents.sendMessage()` 叫那个员工继续，
+这就是 `guard` 是同步函数却能实现「先拒 → 问人 → 放行后重试」的办法。
+
+边界：DSH 的沙箱按会话 cwd 限制可写目录，**放行只解开我们自己那道闸门**，解不开 DSH 的限制 ——
+写桌面这种位置即使点了允许仍然会失败（工具会说明原因）。
+
+### 卡死的任务自动重排
+
+`recoverStale(ctx, root)` 在第一次请求时和之后每 60 秒跑一次：`status === 'running'`、不在 `SHARED.starting`、
+`updatedAt` 超过 2 分钟没动 → 改回 `queued`、`requeued += 1`、`error` 清空，然后 `pumpTasks()` 重新拉起。
+它替代了「DSH 重启后 running 永远挂着」这个老毛病。
+
+
+## 交接与员工工位（0.8.0）
+
+### typed handoff
+
+`parseHandoff(text)` 从员工回答里抽 `{"handoff":{to,title,brief,bound,doneLooks}}`，`runHandoff()` 用**规格四项**去跑目标员工
+（而不是把自由文本丢给他），并把答复以 `### <姓名> 接手后的答复` 的形式接到原回答后面；正文里的 JSON 块会被删掉。
+
+上限写在代码里而不是提示词里：`HANDOFF_MAX_DEPTH = 2`（A→B→C 为止）、`HANDOFF_MAX_PER_TASK = 6`（每件任务的交接次数，
+计数在 `SHARED.handoffCount`）。`to` 不在同部门 → `no-such-colleague`，超限 → `too-many`，都会在群里留一行说明，
+不会静默失败。嵌套交接（B 又交给 C）会把两段答复都拼上。
+
+### 员工工位
+
+`ensureEmpDesk(dir)` 建 `browser/`、`downloads/` 和 `打开浏览器.cmd`（`msedge.exe --user-data-dir="<dir>\browser"`，
+无 Edge 就换 `chrome.exe`）；`ensureAllDesks(root)` 在启动时（`SHARED.desks`）和 `GET /desks` 时把 21 个员工全部备好。
+`empDesk(emp, dir)` 生成工位卡注入 worker 与 handoff 的提示词。
+
+边界：这是**软隔离**。profile 分开、目录分开，但和老板共用同一个 Windows 用户、同一个网络、同一套命令环境 ——
+真要硬隔离得上容器，那部分我们不做（单机收益小于成本）。
+
+
+## 记忆事实卡 + 每人一本技能手册（0.9.0）
+
+### 为什么换掉 `记忆.md`
+
+0.6–0.8 的做法是「每干完一件事追加一行，注入最后 1400 字」。三个问题：
+永远只看得到最近的、旧事实被挤掉；重复记录；没法按主题召回。跑两百轮以后基本等于没有记忆。
+
+### `lib/memory.js`
+
+一条事实 = `{ id, topic, text, at, source, hits }`，存在员工目录的 `记忆.json`（`version: 1`）。
+
+- `recall(dir, query, limit)` —— 中文按 2 字滑窗切词、英文按整词，命中数 ×10 + 召回次数 + 新鲜度排序，
+  取最多 12 条 / 1000 字；被召回的事实 `hits += 1`，于是「常用的」活下来。
+- `remember(dir, facts, source)` —— 去重（同 topic 下短串被长串包含即视为重复），上限 120 条。
+- `extractPrompt({label, taskText, answer})` / `parseFacts(text)` —— 让模型只回
+  `{"facts":[{"topic":"…","text":"…"}]}`，容忍 fenced 与前后废话。
+- `allFacts` / `dropFact` / `clearFacts` —— 给界面用。
+- 老 `记忆.md` 在 `storeOf` 第一次读时导入（`source: 'legacy'`，带 id），之后不再读。
+
+### 抽取放在后台
+
+`rememberAnswer(ctx, cwd, label, answer, memory, taskText)` 不再直接追加行，而是
+`setTimeout(…, 30)` 里调一次 `askModel`（90 秒超时、400 token），把抽到的事实写盘。
+抽取失败不影响任务；结果记在 `SHARED.lastMem`，`GET /diag` 里能直接看到
+（`{at, dir, got, added, sample}` 或 `{skip:'too-short-or-json'}`）。
+
+注入前还有一道 `tidyMemory()`：新事实行（`- [topic] …`）全保留，老流水账行最多留 2 条、每条 100 字，
+否则一次注入一千字全是「已完成…汇报通道正常」的旧日志。
+
+### `lib/skill.js`
+
+`readSkill` / `writeSkill` / `skillCard` / `appendSkill`，文件是员工目录下的 `技能.md`（上限 4000 字）。
+`skillCard(emp, dir)` 拼进 worker 与 handoff 的提示词；`appendSkill` 给员工自己追加用（去重）。
+
+### 路由
+
+- `GET /members/<id>/memory` → `{rows:[{id,topic,text,at,hits}], total}`
+- `POST /members/<id>/memory` `{text, topic}` → 老板手动记一条
+- `DELETE /members/<id>/memory/<factId>` / `POST /members/<id>/memory/clear`
+- `GET /members/<id>/skill` / `PUT /members/<id>/skill` `{text}`
+
+坑：`/memory/clear` 会被「加一条记忆」那条 POST 抢走（`tail` 同样是 `memory`），
+所以通用那条要加 `parts.length === 3` 才命中。
+
+### 界面
+
+组织 → 员工 → 编辑 里多了两块：**记得的事**（条数、每条带主题标签、单条忘掉、手动记一条、整组清空）
+和**技能手册**（预览 / 改 / 保存）。都走上面几个路由，不需要刷新整个面板。
+
+
 ## 界面默认是安静的
 
 执行过程（调了什么工具、读到什么）**默认不显示**，只给结果——给普通用户看的是「他说了什么、做完没有」，不是 agent 的思考流水账。想看过程：助理页右上角「能力设置」→「显示执行过程」打开，之后每条回复下面会出现「过程 · N 步」可展开；这个开关存在 `state.json` 的 `ui.showTrace`，重启也记得。任务详情页里的步骤永远显示——那个页面本来就是用来看过程的。
