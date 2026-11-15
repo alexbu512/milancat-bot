@@ -403,6 +403,16 @@ ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | u
 实测：赵宁写 `E:\DSH工作区\gate-a.txt` → 拦 + 请示 → 「一直允许」→ 规则落盘 → 下一件同样的写入直接过闸，文件内容 `ok`，
 且台账没有新的请示行；换成同目录外的 `gate-b.txt` 仍然照问（规则按路径前缀判定，不会一次放开整个盘）。
 
+### 手册自己压（0.10.1）
+
+攒到 5 条以上就不再一条条追加，改成 `compactSkill(have.concat(lines))`：
+去掉虚词后按 2-gram 的**包含度**判重（`tooSimilar()`，阈值 0.33；用包含度而不是 Jaccard，因为同一件事的两种说法长度差很大），
+同一件事只留更具体的那条，最后 `slice(-12)` 留最新十二条，整份重写回 `技能.md`。
+
+这里走过一次弯路记下来：一开始让模型「把旧手册和新的合成一份」，实测模型只回了 `{"` 两字（`SHARED.mergeFail` 里存着原文），
+整段解析为空。技能手册是**员工长期资产**，不该交给一次模型调用去重写——机械去重不花钱、结果可预期、最坏只是少一条。
+所以 0.10.1 把 `mergePrompt()` / `parseLines()` 全删了，只留 `compactSkill()`。诊断：`lastSkill = {at, dir, got, added, merged, sample}`。
+
 ### 员工怎么上网
 
 子会话的 `web_fetch` 实测可用（`example.com` 返回 200 + 正文）；没有 `web_search`，所以工作准则里写死了搜索路径：
