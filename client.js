@@ -11,9 +11,13 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------- helpers */
 
     function attempt(base, path, method, body) {
+      /* x-milancat 是面板自己的门牌：宿主只认「同源」或带这个头的请求，
+       * 这样别的网页构造的跨站请求会被预检/403 挡掉。 */
+      const headers = { 'x-milancat': '1' }
+      if (body) headers['content-type'] = 'application/json'
       return fetch(base + path, {
         method: method || 'GET',
-        headers: body ? { 'content-type': 'application/json' } : undefined,
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       })
     }
@@ -797,6 +801,64 @@ window.__ModuleLoader__.load({
 
     /** One employee card: view + inline editing of description / ability prompt. */
     /* 这个人「记得什么、会怎么做」——记忆事实卡 + 技能手册，都在他自己的目录里 */
+    /* 员工自己的浏览器：独立 profile（cookie/登录都与他无关），由宿主替他启动。
+     * 员工在沙箱里起不来浏览器，所以这一步只能老板点。 */
+    function DeskBrowser(props) {
+      const e = props.emp
+      const [info, setInfo] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [note, setNote] = useState('')
+
+      const load = useCallback(async () => {
+        try {
+          setInfo(await api('/members/' + e.id + '/browser'))
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+      }, [e.id])
+
+      useEffect(() => {
+        load()
+      }, [e.id])
+
+      async function open() {
+        setBusy('打开中…')
+        try {
+          const r = await api('/members/' + e.id + '/browser', 'POST', {})
+          setInfo(r)
+          setNote(r.ready === false ? '已经在起了，等两秒再刷新' : '')
+        } catch (err) {
+          setNote(String((err && err.message) || err))
+        }
+        setBusy('')
+      }
+
+      return h(
+        'div',
+        { className: 'dbot-mem' },
+        h(
+          'div',
+          { className: 'dbot-memhead' },
+          h('span', { className: 'dbot-role' }, '他的浏览器'),
+          h(
+            'span',
+            { className: 'dbot-memcount' },
+            !info ? '读取中…' : info.alive ? '开着（端口 ' + info.port + '）' : '没开',
+          ),
+          h('div', { style: { flex: 1 } }),
+          h('button', { className: 'dbot-btn', onClick: load }, '刷新'),
+          h('button', { className: 'dbot-btn primary', onClick: open, disabled: !!busy }, busy || '打开'),
+        ),
+        h(
+          'div',
+          { className: 'dbot-desc' },
+          '这个人的 cookie、登录、书签都只在这个独立 profile 里，和你的浏览器互不影响。他自己在沙箱里起不来浏览器，所以这一步由面板代劳；他要读网页仍然用 web_fetch。',
+        ),
+        info && info.profile ? h('div', { className: 'dbot-skillpre' }, info.profile) : null,
+        note ? h('div', { className: 'dbot-hint' }, note) : null,
+      )
+    }
+
     function MemSkill(props) {
       const e = props.emp
       const [facts, setFacts] = useState(null)
@@ -864,6 +926,25 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dbot-memcount' }, facts === null ? '读取中…' : rows.length + ' 条'),
           h('div', { style: { flex: 1 } }),
           h('button', { className: 'dbot-btn', onClick: load }, '刷新'),
+          rows.length > 3
+            ? h(
+                'button',
+                {
+                  className: 'dbot-btn',
+                  title: '把说同一件事的几条并成一条（机械去重，不花模型的钱）',
+                  onClick: async () => {
+                    try {
+                      const r = await api('/members/' + e.id + '/memory/compact', 'POST', {})
+                      setNote(r.removed ? '并掉了 ' + r.removed + ' 条重复的' : '没有重复的，不用并')
+                      load()
+                    } catch (err) {
+                      setNote(String((err && err.message) || err))
+                    }
+                  },
+                },
+                '整理',
+              )
+            : null,
           rows.length
             ? h(ConfirmBtn, {
                 label: '清空',
@@ -1040,6 +1121,7 @@ window.__ModuleLoader__.load({
               }),
               h(CapPick, { value: f.caps, onChange: set('caps') }),
               h(MemSkill, { emp: e, onChanged: props.onChanged }),
+              h(DeskBrowser, { emp: e }),
               h(
                 'div',
                 { className: 'dbot-actions' },

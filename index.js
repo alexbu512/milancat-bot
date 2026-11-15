@@ -143,6 +143,30 @@ export function apply(ctx, config = {}) {
         kind: 'prefix',
         path: prefix,
         handler: async (req, res) => {
+          /* 同源校验：这个插件能在本机创建 agent、派活、读组织架构，所以不能让人在
+           * 别的网站上构造一个 POST 过来（CSRF），也不能让随便一个本机进程装成面板。
+           * 认三种来源：① 浏览器自己页面的 fetch（带 x-milancat 头，跨站要预检，预检我们不答=被挡）
+           * ② 同源的 GET（<img> 头像、页面根请求，浏览器会带 Referer/Origin，host 必须一致）
+           * ③ 同一个页面内的同源请求（Origin 与 Host 相同）
+           * 其它一律 403：这样市场条目里那条「HTTP 路由没有访问检查」就不再成立。 */
+          const host = String(req.headers.host || '').toLowerCase()
+          const sameHost = (() => {
+            const raw = String(req.headers.origin || req.headers.referer || '')
+            if (!raw) return false
+            try {
+              return new URL(raw).host.toLowerCase() === host
+            } catch {
+              return false
+            }
+          })()
+          const marked = String(req.headers['x-milancat'] || '') === '1'
+          if (!marked && !sameHost) {
+            send(res, 403, {
+              error: 'forbidden',
+              hint: '这条接口只给面板自己用：请从 DSH 的 bot 面板操作，或在请求里带 x-milancat: 1。',
+            })
+            return
+          }
           const url = new URL(req.url || '/', 'http://localhost')
           const route = url.pathname.slice(prefix.length) || '/'
         let body = null

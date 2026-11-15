@@ -489,3 +489,12 @@ ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | u
 | 派活后一直「排队中」 | 有 3 个任务在跑，等一个结束；或看 `/milancat/api/diag` 的 `running` |
 | 员工不动手 / 说没权限 | 检查它的能力开关，以及该任务的工作目录是否在工作区内 |
 | 中文变乱码 | 这个仓库的文件必须用 UTF-8 编辑器改，别用 PowerShell 的 `Get-Content`/`Set-Content` 重写 |
+
+
+## 同源校验 + 员工浏览器 + 记忆整理（0.11.0）
+
+**路由同源校验**（`index.js`，在 `ctx.webServer.register` 的 handler 最前面）：`host` 与 `Origin/Referer` 的 host 必须一致，或请求头带 `x-milancat: 1`（`client.js` 的 `attempt()` 给每个请求都加了这个头），否则 `403 {error:'forbidden'}`。跨站请求会先走预检、我们不答，等于枯萎在浏览器那一层；本机进程用 curl 时补一个头即可。这样市场条目里「HTTP routes have no DSH access check」那句提示就不再成立。
+
+**员工独立浏览器**（`lib/engine.js`）：`browserPort(emp)`（9300 起、按 id 哈希取固定端口）、`findBrowserExe()`（Edge → Chrome）、`launchEmpBrowser(root, emp)`（`spawn(exe, ['--user-data-dir=<desk>/browser', '--remote-debugging-port=<port>', …], {detached:true, stdio:'ignore'})`，然后轮询 `http://127.0.0.1:<port>/json/version` 最多 12 次确认起来）、`browserAlive(port)`。路由 `GET /members/<id>/browser`（`{ok, port, alive, exe, profile}`）与 `POST /members/<id>/browser`（启动，返回 `agentStatus: 'launched'|'failed'`）。出网闸门对 `127.0.0.1/localhost` 放行，所以员工真要驱动自己的浏览器 CDP 端口时不会被自己人拦。
+
+**记忆整理**：`POST /members/<id>/memory/compact` 用 `sameGist(a,b)`（2-gram 包含度 ≥ 0.5，**不看 topic**——同一个结论常被记成「权限范围/权限边界/文件权限」三种 topic）合并同义事实，保留更长的那条，最后按常用度截到 120 条。界面在「记得的事」头部加了「整理」。实测：陈默 22 条 → 18 条 → 再整理 18 → 15 条，被并掉的全是同义句。
