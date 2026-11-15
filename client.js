@@ -2005,6 +2005,7 @@ window.__ModuleLoader__.load({
       const [who, setWho] = useState('')
       const [note, setNote] = useState('')
       const [apps, setApps] = useState([])
+      const [rules, setRules] = useState([])
 
       const load = useCallback(async (pick) => {
         const q = new URLSearchParams({ limit: '400' })
@@ -2016,6 +2017,8 @@ window.__ModuleLoader__.load({
           setStats((r && r.stats) || null)
           const ap = await api('/approvals')
           setApps(Array.isArray(ap && ap.rows) ? ap.rows : [])
+          const gr = await api('/guard/rules')
+          setRules(Array.isArray(gr && gr.rows) ? gr.rows : [])
         } catch (e) {
           setNote(String((e && e.message) || e))
         }
@@ -2033,10 +2036,18 @@ window.__ModuleLoader__.load({
         }
       }, [load, filter])
 
-      const decide = async (id, verb) => {
+      const decide = async (id, verb, scope) => {
         try {
-          await api('/approvals/' + encodeURIComponent(id) + '/' + verb, 'POST', {})
-          setNote(verb === 'allow' ? '已经放行，员工会接着做。' : '已经拒绝，员工会换个办法。')
+          await api('/approvals/' + encodeURIComponent(id) + '/' + verb, 'POST', scope ? { scope } : {})
+          setNote(
+            verb === 'allow'
+              ? scope === 'always'
+                ? '放行了，以后这个目录下我都不会再问。'
+                : scope === 'day'
+                  ? '放行了，今天这个目录下不再问。'
+                  : '已经放行，员工会接着做。'
+              : '已经拒绝，员工会换个办法。',
+          )
         } catch (e) {
           setNote(String((e && e.message) || e))
         }
@@ -2084,8 +2095,30 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dbot-pendtag' }, '请示 ' + a.n),
                   h('div', { className: 'dbot-pendtext', title: a.path },
                     (a.member || '员工') + ' 想改 ' + a.path),
-                  h('button', { className: 'dbot-btn primary', onClick: () => decide(a.id, 'allow') }, '允许'),
-                  h('button', { className: 'dbot-btn', onClick: () => decide(a.id, 'deny') }, '拒绝'))))
+                  h('button', { className: 'dbot-btn primary', onClick: () => decide(a.id, 'allow', 'once') }, '允许一次'),
+                  h('button', { className: 'dbot-btn', onClick: () => decide(a.id, 'allow', 'day') }, '今天都行'),
+                  h('button', { className: 'dbot-btn', onClick: () => decide(a.id, 'allow', 'always'), title: '以后这个目录下都不用再问（重启后还算数）' }, '一直允许'),
+                  h('button', { className: 'dbot-btn danger', onClick: () => decide(a.id, 'deny') }, '拒绝'))))
+            : null,
+          rules.length
+            ? h('div', { className: 'dbot-actrules' },
+              h('div', { className: 'dbot-pendtag' }, '已放行的目录 ' + rules.length),
+              h('div', { className: 'dbot-actrulelist' },
+                rules.slice(0, 6).map((r, i) =>
+                  h('div', { key: `${r.path}-${i}`, className: 'dbot-actrule', title: r.path + (r.note ? '（' + r.note + '）' : '') },
+                    (Number(r.until || 0) === 0 ? '一直：' : '到今天：') + r.path))),
+              h('button', {
+                className: 'dbot-btn',
+                onClick: async () => {
+                  try {
+                    await api('/guard/rules/clear', 'POST', {})
+                    setNote('放行规则都清掉了，下次越界会重新问你。')
+                  } catch (e) {
+                    setNote(String((e && e.message) || e))
+                  }
+                  load(filter)
+                },
+              }, '全部收回'))
             : null,
           note ? h('div', { className: 'dbot-hint' }, note) : null,
           !list.length
@@ -2904,6 +2937,9 @@ window.__ModuleLoader__.load({
 .dbot-pendrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0}
 .dbot-pendrow + .dbot-pendrow{border-top:1px solid #F0DEC6}
 .dbot-pendtag{font-size:11px;font-weight:600;color:#8A620E;background:#FBEFD9;border-radius:6px;padding:2px 7px}
+.dbot-actrules{margin:0 28px 10px;border:1px solid #D1D7E1;background:#F8F9FB;border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dbot-actrulelist{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:3px}
+.dbot-actrule{font-size:11.5px;color:#586170;font-family:var(--dbot-font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dbot-pendtext{flex:1 1 240px;min-width:0;font-size:12.5px;color:#20242C;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dbot-pendtext code{font-family:var(--dbot-font-mono);font-size:11.5px;color:#586170}
 .dbot-footnote{margin:16px 0 4px;font-size:10.5px;line-height:1.75;color:var(--dbot-text-muted)}

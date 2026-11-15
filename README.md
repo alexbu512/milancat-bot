@@ -378,6 +378,44 @@ ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | u
 和**技能手册**（预览 / 改 / 保存）。都走上面几个路由，不需要刷新整个面板。
 
 
+## 技能自己长 / 三种放行 / 员工怎么上网（0.10.0）
+
+### 技能自动生长
+
+`runAgent` 结尾跟记忆抽取并排多了一路 `learnSkill(ctx, cwd, label, answer, taskText)`（`lib/engine.js`，紧挨 `rememberAnswer`）：
+跳过 ≤ 40 字或像 JSON 的输出 → `setTimeout(…).unref()` 后台 `askModel`（system「你是带徒弟的老师傅，只输出 JSON。」、90 s、300 token）
+→ `learnPrompt()` 要求最多 2 条、只写做法不写结果、10–40 字、没得学就返回空数组 → `parseSkillLines()` 宽容解析
+→ `appendSkill(cwd, line)`（`lib/skill.js`，去重、`MAX = 4000` 字封顶）。超过 3600 字先判 `skill-full` 不再长。
+诊断：`GET /diag` 的 `lastSkill = {at, dir, got, added, sample}`。
+
+实测：市场部韩东（技能手册从空开始）干完一件「整理三条动作」的活，30 秒后文件里自己长出两条；
+后期组方岩做完两件盘点活后累计四条，其中包括「本机浏览器抓取被拦时，改用已实测可用的抓取工具」——
+它把**踩过的坑**也总结成了做法。
+
+### 三种放行档位（0.7.1 的「允许」长成三档）
+
+- `resolveApproval(ctx, root, id, allow, scope)`，`scope = 'once' | 'day' | 'always'`。
+- `once` → `SHARED.allowPaths`（内存，30 分钟）；`day` → 到当天 23:59:59.999；`always` → `writeGuardRule()` 写进 `state.json.guard.allow`（`until: 0` 表示永不过期），重启后仍然算数。
+- `approvalCovers(root, abs)`：内存表命中即放行，否则查 `guardRules(root)`（`until === 0 || now < until` 且 `insideDir`）。
+- 路由：`POST /approvals/<id>/allow` 带 `{scope}`；`GET /guard/rules` 列规则；`POST /guard/rules/clear` 全部收回。
+- 界面：「活动」页请示行四个按钮（允许一次 / 今天都行 / 一直允许 / 拒绝），顶部一段「已放行的目录 N」+ `[全部收回]`。
+
+实测：赵宁写 `E:\DSH工作区\gate-a.txt` → 拦 + 请示 → 「一直允许」→ 规则落盘 → 下一件同样的写入直接过闸，文件内容 `ok`，
+且台账没有新的请示行；换成同目录外的 `gate-b.txt` 仍然照问（规则按路径前缀判定，不会一次放开整个盘）。
+
+### 员工怎么上网
+
+子会话的 `web_fetch` 实测可用（`example.com` 返回 200 + 正文）；没有 `web_search`，所以工作准则里写死了搜索路径：
+`web_fetch https://html.duckduckgo.com/html/?q=<关键词>`（中文先 URL 编码）→ 挑 2–3 条读正文 → 引用时带链接。
+
+两件做不到的事，写进 `WORKER_RULES` 并由闸门兜住：
+
+- `computer_*` 一律拒（`installGuard` 里 `/^computer_/i` 分支，理由「这是老板的鼠标键盘」），防止员工抢老板桌面。
+- 用 `pwsh` 启动 msedge / chrome 起不来：沙箱报 `mojo platform_channel Check failed: 拒绝访问 (0x5)`。
+  员工自己会把这条写成技能（见上面方岩的第 4 条）。要看网页就 `web_fetch`。
+
+`GUARD_VERSION` 6（加了 `computer_*` 分支；改守卫逻辑必须 bump，否则旧闭包一直返回 `already`）。
+
 ## 界面默认是安静的
 
 执行过程（调了什么工具、读到什么）**默认不显示**，只给结果——给普通用户看的是「他说了什么、做完没有」，不是 agent 的思考流水账。想看过程：助理页右上角「能力设置」→「显示执行过程」打开，之后每条回复下面会出现「过程 · N 步」可展开；这个开关存在 `state.json` 的 `ui.showTrace`，重启也记得。任务详情页里的步骤永远显示——那个页面本来就是用来看过程的。
