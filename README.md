@@ -426,6 +426,14 @@ ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | u
 
 `GUARD_VERSION` 6（加了 `computer_*` 分支；改守卫逻辑必须 bump，否则旧闭包一直返回 `already`）。
 
+## 员工能看屏幕 / 命令里的写盘也走请示 / 原生问题卡（0.10.2）
+
+- 只读的桌面工具放行：`computer_screenshot`、`computer_get_cursor_position`；其余 `computer_*` 仍然拒。
+- 堵掉 pwsh 越界写盘：`riskyWritePaths(cmd)` 从命令里挑出绝对路径（重定向 + 写类 cmdlet 的参数），落在员工工位与 `.milancat` 之外的一律按「越界写入」处理：写台账 `deny`、建请示、`askNative` 顺手问一次。实测陈默写桌面被拒、没有落盘。
+- `askNative(ctx, root, rec)`：把请示送到 DSH 自带问题卡（`ctx.get('userQuestions').ask`）。`intent.kind='approval'` 要求**正好三个**选项，多一个就报 `requires 3 options matching its actions`。请求方必须是普通会话的根 agent，子 agent 会拿到 `human interaction is unavailable while the calling agent is owned by another live agent`——所以写了 `bossAgent(ctx)` 挑没有 `parentSession`、`origin !== 'subagent'` 的那个。
+- 原生卡是**尽力而为**：`NATIVE_ASK_TTL = 90 * 1000`，无人认领就 abort，`/diag` 的 `lastNative` 会写 `aborted: true`；请示本身留在面板里。
+- 改 guard 里的任何逻辑都要 **bump `GUARD_VERSION`**：旧闭包被 `__MILANCAT_GUARD__` 持有，不 bump 就一直是老代码在判（这一轮从 6 bump 到 11，中间吃过一次「改了没生效」的亏）。
+
 ## 界面默认是安静的
 
 执行过程（调了什么工具、读到什么）**默认不显示**，只给结果——给普通用户看的是「他说了什么、做完没有」，不是 agent 的思考流水账。想看过程：助理页右上角「能力设置」→「显示执行过程」打开，之后每条回复下面会出现「过程 · N 步」可展开；这个开关存在 `state.json` 的 `ui.showTrace`，重启也记得。任务详情页里的步骤永远显示——那个页面本来就是用来看过程的。
