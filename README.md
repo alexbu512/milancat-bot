@@ -431,8 +431,8 @@ ToolGuard = (execution: Readonly<ToolExecution>) => string | ToolGuardDenial | u
 - 只读的桌面工具放行：`computer_screenshot`、`computer_get_cursor_position`；其余 `computer_*` 仍然拒。
 - 堵掉 pwsh 越界写盘：`riskyWritePaths(cmd)` 从命令里挑出绝对路径（重定向 + 写类 cmdlet 的参数），落在员工工位与 `.milancat` 之外的一律按「越界写入」处理：写台账 `deny`、建请示、`askNative` 顺手问一次。实测陈默写桌面被拒、没有落盘。
 - `askNative(ctx, root, rec)`：把请示送到 DSH 自带问题卡（`ctx.get('userQuestions').ask`）。`intent.kind='approval'` 要求**正好三个**选项，多一个就报 `requires 3 options matching its actions`。请求方必须是普通会话的根 agent，子 agent 会拿到 `human interaction is unavailable while the calling agent is owned by another live agent`——所以写了 `bossAgent(ctx)` 挑没有 `parentSession`、`origin !== 'subagent'` 的那个。
-- 原生卡是**尽力而为**：`NATIVE_ASK_TTL = 90 * 1000`，无人认领就 abort，`/diag` 的 `lastNative` 会写 `aborted: true`；请示本身留在面板里。
-- 改 guard 里的任何逻辑都要 **bump `GUARD_VERSION`**：旧闭包被 `__MILANCAT_GUARD__` 持有，不 bump 就一直是老代码在判（这一轮从 6 bump 到 11，中间吃过一次「改了没生效」的亏）。
+- 原生卡**实测可用**（0.10.3 更正 0.10.2 的说法）：真人守着窗口时会弹、能点。证据链：`deny write E:\DSH工作区\accept-b.txt` → 83 秒后 `approval 允许` → 6 秒后 `tool write ok:true` → `read ok:true`。因此 `NATIVE_ASK_TTL` 从 90 秒放宽到 **10 分钟**；无人应答时 abort，请示留在面板里，两条路互补。
+- 改 guard 里的任何逻辑都要 **bump `GUARD_VERSION`**（旧闭包被 `__MILANCAT_GUARD__` 持有，不 bump 就一直是老代码在判；这一轮从 6 bump 到 11）。
 
 ## 界面默认是安静的
 
