@@ -147,6 +147,15 @@ DeepSeek 的 superagent 原型里没有这些数——它一个 Ticket 一个 Ex
 另外两件同一批改的事：所有子 agent 共用**一个** 900ms 的 trace 轮询定时器（原来每个 child 一个 `setInterval`，人多时定时器比活还多）；面板轮询在 `assistant.busy` 时改成 400ms（原来固定 2.2 秒，等于给每条回复白加最多 2.2 秒的「看起来慢」）。
 
 
+## 出网：只拦"往外送"，不拦"读"（0.10.4）
+
+员工拿到 `web_fetch` 与 shell 之后，剩下的风险是外发（把工位里的文件 POST 出去、`git push`、`ssh`）。做法是**只拦外发**：`egressSend(cmd)` 判断这条命令是否在送东西，是就按主机名生成请示（`net://host`），否则放行。
+
+- 判定：`curl/wget` + `-X POST|PUT|PATCH|DELETE` / `--data` / `-d` / `-F` / `-T` / `--json`；`Invoke-RestMethod|Invoke-WebRequest` + `-Method Post` / `-Body` / `-InFile`；`nc|ncat|scp|sftp|rsync|ssh|ftp|telnet`；`git push`。GET/读页面不触发。
+- 存储：`state.guard.net = [{host, until, at, note}]`；内存里另有 `SHARED.allowNet`（`APPROVAL_TTL` 30 分钟）。`netCovers(root, host)` 先查内存再查持久；`until === 0` 表示永久，`'*'` 表示全放。
+- 为什么不学 OpenBot 的域名白名单：它是云端多租户（filter proxy + fail-closed），我们单机日常查资料会被白名单卡死；只堵外发是同样安全收益、零日常成本。
+- 实测：`curl -X POST http://127.0.0.1:63139/bot/api/ping` → `deny` + 请示 13 → 允许 → 重试 `ok:true`；同轮 `web_fetch https://example.com` 与 `curl.exe -s https://example.com` 零拦截。
+
 ## 界面：浅银灰 + 明亮蓝（0.5.0）
 
 外观按设计稿重做，**行为与数据结构零改动**。要点：
